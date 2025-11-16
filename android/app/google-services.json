@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "250945452144",
+    "project_id": "memoraapp-c5a0a",
+    "storage_bucket": "memoraapp-c5a0a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:250945452144:android:e612ddfe8c8c0f3c98dcb5",
+        "android_client_info": {
+          "package_name": "com.example.memora_application"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAlUpL1VPUAQmJK9RPbLYAGlQucezU7hyw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
