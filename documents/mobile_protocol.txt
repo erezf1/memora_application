@@ -1,0 +1,186 @@
+Backend Integration Specification: MCI Voice Assistant (Multi-User Version)
+1. System Overview
+
+This document outlines the API and logic required for the backend agent system to integrate with the MCI Voice Assistant mobile app. The system now supports multiple, unique users, each identified by their phone number.
+
+2. Core Concepts
+
+user_phone / user_id: The primary and unique identifier for a user.
+It is always provided in the normalized international format (e.g., 972547778005).
+
+fcm_token: The unique registration token for the app on a specific device, provided by Firebase. This token is essential for sending push notifications and can change over time.
+
+3. Database Requirements
+
+The backend uses two main tables for user and device management.
+
+**Table: `users`**
+| Column     | Type        | Notes                                                        |
+| :--------- | :---------- | :----------------------------------------------------------- |
+| user_phone | VARCHAR(20) | Primary Key. The user's unique, normalized phone number.     |
+| name       | VARCHAR(255)| The user's provided name.                                    |
+| gender     | VARCHAR(10) | The user's gender ('male', 'female', or 'other').            |
+
+**Table: `devices`**
+| Column    | Type        | Notes                               |
+| :-------- | :---------- | :---------------------------------- |
+| `device_id` | `SERIAL`    | Primary Key.                        |
+| `user_id` | `VARCHAR(20)` | Foreign Key to `users.user_phone`.  |
+| `fcm_token` | `TEXT`      | Firebase Cloud Messaging token.     |
+
+4. API Endpoints
+
+The backend must expose the following HTTP POST endpoints. All request and response bodies are in JSON format.
+
+Endpoint 1: First-Time User Registration
+
+This endpoint is used by the mobile app ONLY when a user registers for the first time.
+
+Method: POST
+Path: /register-user
+Request Body (JSON):
+{
+  "user_phone": "972541234567",
+  "name": "ישראל ישראלי",
+  "gender": "male",
+  "language": "he", // Optional: "he" or "en". Defaults to "he" if not provided.
+  "fcm_token": "dEgPUpGiSd64ytltFCdIWM:APA91b..."
+}
+
+Backend Logic:
+- Receive the user data.
+- Find or create a user in the `users` table based on `user_phone`.
+- Create or update a corresponding record in the `devices` table, associating the `fcm_token` with the `user_phone`.
+- This ensures that if a user registers on a new device, the new FCM token is captured without overwriting their core profile.
+
+Success Response:
+Status Code: 200 OK
+Body (JSON): { "status": "success", "message": "User registered or updated successfully." }
+
+
+Endpoint 2: Session Initiation (for Existing Users)
+
+This endpoint is used every time a registered user opens the app. It syncs their data and FCM token.
+
+Method: POST
+Path: /initiate-session
+Request Body (JSON):
+{
+  "user_phone": "972541234567",
+  "name": "ישראל ישראלי",
+  "gender": "male",
+  "language": "he", // Optional: "he" or "en". Defaults to "he" if not provided.
+  "fcm_token": "dEgPUpGiSd64ytltFCdIWM:APA91b..."
+}
+
+Backend Logic:
+- Receive the user data.
+- This logic is identical to the `/register-user` endpoint. It finds the user by `user_phone` and updates their `name`, `gender`, and ensures the `fcm_token` in the `devices` table is current for that user.
+
+Success Response:
+Status Code: 200 OK
+Body (JSON): { "status": "success", "message": "Session initiated and user data synchronized." }
+
+
+Endpoint 3: Conversation Processing
+
+Path: /voice/process
+Request Body (JSON):
+{
+  "user_id": "972541234567", // Normalized phone number
+  "message": "The text transcribed from the user's speech.",
+  "audio_data": null
+}
+
+
+Endpoint 4: Agent-Initiated Call Answered
+
+Path: /voice/call-answered
+Request Body (JSON): { "user_id": "972541234567" }
+
+
+Endpoint 5: Agent-Initiated Call Declined
+
+Path: /voice/call-declined
+Request Body (JSON): { "user_id": "972541234567" }
+
+
+5. Workflow Walkthroughs
+
+Flow A: First-Time User Registration
+1. A new user opens the app and sees the registration screen.
+2. The user enters their name, gender, and phone number.
+3. The app normalizes the phone number to `972541234567`.
+4. The app saves the full profile to local storage.
+5. The app gets a unique `fcm_token` from Firebase.
+6. The app sends a POST request to `/register-user` with the following body:
+   ```json
+   {
+     "user_phone": "972541234567",
+     "name": "ישראלה ישראלי",
+     "gender": "female",
+     "language": "he",
+     "fcm_token": "dEgPUpGiSd6..."
+   }
+   ```
+7. The backend performs an UPSERT operation. Since the user is new, they are inserted into the `users` table. The user proceeds to the HomeScreen.
+
+Flow B: Existing User App Start (Session Initiation)
+1. A registered user opens the app.
+2. The app reads the saved User Profile (`name`, `gender`, `phone`) from its local storage.
+3. The app gets the latest `fcm_token` from Firebase.
+4. The app sends a POST request to `/initiate-session` with the following body:
+   ```json
+   {
+     "user_phone": "972541234567",
+     "name": "ישראלה ישראלי",
+     "gender": "female",
+     "language": "he",
+     "fcm_token": "dEgPUpGiSd6..."
+   }
+   ```
+5. The backend performs an UPSERT on the `users` table, ensuring the user's data and FCM token are up-to-date.
+6. The app proceeds to the HomeScreen.
+
+Flow C: User-Initiated Conversation
+1. The user speaks a message. The app transcribes it.
+2. The app sends a POST request to /voice/process with the saved user_id and the transcribed message.
+3. The backend processes the message and returns the agent's reply.
+4. The app speaks the reply. The conversation continues until the user closes the app.
+5. Upon closing the app, the app sends one final POST to /voice/process with the message "USER_CLOSED_APP".
+
+Flow D: Agent-Initiated Conversation (Reminder/Ring)
+1. An event triggers the agent on the backend for a specific user (identified by user_phone, e.g., 972541234567).
+2. The backend queries the users table using 972541234567 to retrieve the corresponding fcm_token.
+3. The backend authenticates with Google (using its Service Account key) to get a temporary OAuth 2.0 access token.
+4. The backend constructs and sends an HTTP V1 FCM request to Google's servers.
+   URL: https://fcm.googleapis.com/v1/projects/mci-assistant/messages:send
+   Headers:
+     Content-Type: application/json
+     Authorization: Bearer <Generated_Access_Token>
+   Body (JSON):
+   {
+     "message": {
+       "token": "THE_FCM_TOKEN_FROM_DATABASE",
+       "data": {
+         "title": "תזכורת חשובה", // The title for the notification UI
+         "body": "שלום, זה הזמן לקחת את התרופה שלך." // The text the app will speak when the user answers
+       }
+     }
+   }
+5. The mobile app receives the push notification and displays a full-screen "incoming call" interface.
+6. User Interaction with "Incoming Call":
+   - If the user "answers" the call:
+     a. The app first sends a POST request to /voice/call-answered with the `user_id`.
+     b. The app then navigates to the main conversation screen.
+     c. The app speaks the `body` content from the FCM notification.
+     d. The conversation then continues as described in Flow C, starting with the app listening for the user's response.
+   - If the user "declines" the call (e.g., presses a decline button):
+     a. The app sends a POST request to /voice/call-declined with the `user_id`.
+     b. The incoming call screen is dismissed. No further conversation flow is initiated by this event.
+   - If the user does not answer (No Answer):
+     a. The app does nothing. It does not send any request to the backend.
+     b. The backend is responsible for handling this scenario. After sending the notification, the backend will start a timer. If it doesn't receive a `/voice/call-answered` or `/voice/call-declined` request within a configured timeout period, it will assume the user did not answer and proceed with its internal logic (e.g., log a missed notification, retry, or escalate to caregivers).
+
+6. Backend Server Address
+Configured Base URL: http://memora.aigents.co.il

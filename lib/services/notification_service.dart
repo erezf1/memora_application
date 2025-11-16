@@ -1,152 +1,194 @@
 // lib/services/notification_service.dart
 
-import 'dart:convert'; // --- FIX: Import dart:convert for jsonDecode ---
-import 'package:flutter/material.dart';
+import 'dart:convert';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import '../screens/main_conversation_screen.dart';
-import '../main.dart'; // --- FIX: Import main.dart to access the global navigatorKey ---
-import 'api_service.dart';
+import '../main.dart'; // for navigatorKey
 
 class NotificationService {
-  // --- NEW: Instance for standard notifications ---
-  static final FlutterLocalNotificationsPlugin _localNotificationsPlugin =
+  NotificationService._(); // private constructor
+
+  static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
-  NotificationService();
+  /// Call once from main() in the foreground isolate.
+  static Future<void> initialize() async {
+    // --- Local notifications initialization ---
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
 
-  Future<void> initialize() async {
-    // Initialize the local notifications plugin for our fallback
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-    const InitializationSettings initializationSettings =
-        InitializationSettings(android: initializationSettingsAndroid);
-    await _localNotificationsPlugin.initialize(
-      initializationSettings,
-      onDidReceiveNotificationResponse: _onDidReceiveNotificationResponse,
-      onDidReceiveBackgroundNotificationResponse:
-          _onDidReceiveBackgroundNotificationResponse,
+    const initSettings = InitializationSettings(
+      android: androidInit,
     );
 
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      print(
-          "[NotificationService] Foreground message received: ${message.messageId}");
-      print("[NotificationService] Foreground Payload: ${message.data}");
+    await _plugin.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: _onNotificationResponse,
+    );
 
-      if (message.data['type'] == 'incoming_call') {
-        // When in foreground, show the heads-up notification with buttons.
-        _showStandardIncomingCallNotification(message);
-      }
-    });
+    // --- FCM foreground & tap handlers ---
+    FirebaseMessaging.onMessage.listen(_onForegroundMessage);
+    FirebaseMessaging.onMessageOpenedApp.listen(_onMessageOpenedApp);
 
-    FirebaseMessaging.instance
-        .getInitialMessage()
-        .then((RemoteMessage? message) {
-      if (message != null) {
-        print(
-            "[NotificationService] App opened from terminated state by message: ${message.messageId}");
-      }
-    });
-  }
-
-  // --- NEW: Handlers for local notification button taps ---
-  @pragma('vm:entry-point')
-  static void _onDidReceiveBackgroundNotificationResponse(
-      NotificationResponse notificationResponse) {
-    print(
-        "[Notification] Background action tapped: ${notificationResponse.actionId}");
-    _handleNotificationAction(notificationResponse);
-  }
-
-  void _onDidReceiveNotificationResponse(
-      NotificationResponse notificationResponse) {
-    print(
-        "[Notification] Foreground action tapped: ${notificationResponse.actionId}");
-    _handleNotificationAction(notificationResponse);
-  }
-
-  static void _handleNotificationAction(
-      NotificationResponse notificationResponse) {
-    final payload = jsonDecode(notificationResponse.payload ?? '{}');
-    final String callId = payload['call_id'] ?? '';
-    final String userPhone = payload['user_phone'] ?? '';
-    final String description = payload['description'] ?? '';
-
-    if (notificationResponse.actionId == 'answer_action') {
-      print("[Notification] User chose to ANSWER the call.");
-      // Since this is a static method, we create a new ApiService instance.
-      ApiService().answerCall(userPhone, callId);
-      navigatorKey.currentState?.pushAndRemoveUntil(
-        MaterialPageRoute(
-            builder: (_) => MainConversationScreen(
-                userPhone: userPhone, initialMessage: description)),
-        (route) => false,
-      );
-    } else if (notificationResponse.actionId == 'decline_action') {
-      print("[Notification] User chose to DECLINE the call.");
-      // Since this is a static method, we create a new ApiService instance.
-      ApiService().declineCall(userPhone, callId);
+    // If the app was launched by tapping a notification
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMessage != null) {
+      _handleRemoteMessage(initialMessage, source: 'launch');
     }
   }
 
-  // This function now handles all incoming call notifications.
-  static Future<void> _showStandardIncomingCallNotification(
-      RemoteMessage message) async {
-    print("[Notification] Attempting to show call-style notification...");
-    try {
-      const AndroidNotificationDetails androidPlatformChannelSpecifics =
-          AndroidNotificationDetails(
-        'memora_incoming_call_channel', // A unique channel ID for calls
-        'Incoming Calls', // A channel name
-        channelDescription: 'Channel for incoming call notifications.',
-        importance: Importance.max,
-        priority: Priority.high,
-        showWhen: true,
-        // --- IMPLEMENTING THE EXPLANATION ---
-        category: AndroidNotificationCategory.call, // Mark as a call
-        fullScreenIntent: true, // This is the key for locked screens
-        // ---
-        actions: <AndroidNotificationAction>[
-          AndroidNotificationAction(
-            'answer_action',
-            'Answer',
-            showsUserInterface: true,
-          ),
-          AndroidNotificationAction(
-            'decline_action',
-            'Decline',
-          ),
-        ],
-      );
-      const NotificationDetails platformChannelSpecifics =
-          NotificationDetails(android: androidPlatformChannelSpecifics);
-
-      await _localNotificationsPlugin.show(
-        message.hashCode,
-        message.data['caller_name'] ?? 'Incoming Call',
-        'Tap to answer or decline.',
-        platformChannelSpecifics,
-        payload: jsonEncode(message.data),
-      );
-      print("[Notification] Call-style notification shown successfully.");
-    } catch (e) {
-      print("[Notification] FAILED to show call-style notification: $e");
-    }
-  }
-
+  // ============================================================
+  // FCM BACKGROUND HANDLER
+  // ============================================================
+  /// This is referenced in main.dart as:
+  /// FirebaseMessaging.onBackgroundMessage(NotificationService.firebaseMessagingBackgroundHandler);
   @pragma('vm:entry-point')
-  static Future<void> processBackgroundMessage(RemoteMessage message) async {
+  static Future<void> firebaseMessagingBackgroundHandler(
+    RemoteMessage message,
+  ) async {
+    // Ensure Firebase is ready in the background isolate.
     await Firebase.initializeApp();
-    print(
-        "[NotificationService] Background handler processing message: ${message.messageId}");
-    print("[NotificationService] Background Payload: ${message.data}");
 
-    if (message.data['type'] == 'incoming_call') {
-      // Always attempt to show the call-style notification.
-      // The OS will decide how to display it (full-screen or heads-up).
-      await _showStandardIncomingCallNotification(message);
+    // Initialize local notifications (no tap callback needed here).
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const initSettings = InitializationSettings(android: androidInit);
+    await _plugin.initialize(initSettings);
+
+    _handleRemoteMessage(message, source: 'background');
+  }
+
+  // ============================================================
+  // FCM MESSAGE ROUTING
+  // ============================================================
+  static void _onForegroundMessage(RemoteMessage message) {
+    _handleRemoteMessage(message, source: 'foreground');
+  }
+
+  static void _onMessageOpenedApp(RemoteMessage message) {
+    _handleRemoteMessage(message, source: 'opened_app');
+  }
+
+  /// Central place to interpret incoming FCM messages.
+  static void _handleRemoteMessage(
+    RemoteMessage message, {
+    required String source,
+  }) {
+    final data = message.data;
+    final type = data['type'];
+
+    // Debug logs (you can keep or remove)
+    // print('[NotificationService] FCM from $source: ${message.messageId}');
+    // print('[NotificationService] data: $data');
+
+    if (type == 'incoming_call') {
+      final callerName = data['callerName'] ?? 'Unknown';
+      final callId = data['callId'] ?? '';
+
+      _showIncomingCallNotification(
+        callerName: callerName,
+        callId: callId,
+      );
+    } else {
+      // Handle other notification types if needed
+      final title = data['title'] ?? 'Memora';
+      final body = data['body'] ?? 'You have a new notification';
+
+      _showBasicNotification(title: title, body: body);
+    }
+  }
+
+  // ============================================================
+  // LOCAL NOTIFICATION HELPERS
+  // ============================================================
+
+  /// Simple notification (no full-screen).
+  static Future<void> _showBasicNotification({
+    required String title,
+    required String body,
+  }) async {
+    const androidDetails = AndroidNotificationDetails(
+      'memora_basic_channel',
+      'Memora Notifications',
+      channelDescription: 'General Memora notifications',
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+    );
+
+    const details = NotificationDetails(android: androidDetails);
+
+    await _plugin.show(
+      DateTime.now().millisecondsSinceEpoch ~/ 1000, // unique ID
+      title,
+      body,
+      details,
+    );
+  }
+
+  /// Full-screen incoming call notification.
+  static Future<void> _showIncomingCallNotification({
+    required String callerName,
+    required String callId,
+  }) async {
+    const androidDetails = AndroidNotificationDetails(
+      'memora_incoming_call_channel',
+      'Incoming Calls',
+      channelDescription: 'Memora incoming call notifications',
+      importance: Importance.max,
+      priority: Priority.high,
+      category: AndroidNotificationCategory.call,
+      fullScreenIntent: true, // 💥 key flag to get call-style behavior
+      autoCancel: false,
+      ongoing: true,
+    );
+
+    const details = NotificationDetails(android: androidDetails);
+
+    final payload = jsonEncode({
+      'type': 'incoming_call',
+      'callerName': callerName,
+      'callId': callId,
+    });
+
+    await _plugin.show(
+      9999, // fixed ID for the active call
+      'Incoming call',
+      callerName,
+      details,
+      payload: payload,
+    );
+  }
+
+  /// Cancel the active incoming call notification.
+  static Future<void> cancelIncomingCallNotification() async {
+    await _plugin.cancel(9999);
+  }
+
+  // ============================================================
+  // TAP HANDLER
+  // ============================================================
+
+  static void _onNotificationResponse(NotificationResponse response) {
+    final payload = response.payload;
+    if (payload == null || payload.isEmpty) return;
+
+    final data = jsonDecode(payload) as Map<String, dynamic>;
+    final type = data['type'];
+
+    if (type == 'incoming_call') {
+      final callerName = data['callerName'] as String? ?? 'Unknown';
+      final callId = data['callId'] as String? ?? '';
+
+      // Navigate to the dedicated incoming call screen.
+      // This uses the global navigatorKey from main.dart.
+      navigatorKey.currentState?.pushNamed(
+        '/incoming_call',
+        arguments: {
+          'callerName': callerName,
+          'callId': callId,
+        },
+      );
     }
   }
 }
