@@ -9,24 +9,23 @@ import 'screens/splash_screen.dart';
 import 'screens/incoming_call_screen.dart';
 import 'services/notification_service.dart';
 
-/// Global navigator key so NotificationService can navigate from
-/// notification taps (e.g., to an incoming-call screen).
+/// Global navigator key so NotificationService can navigate
+/// from notification taps.
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Register background message handler BEFORE Firebase.initializeApp().
-  FirebaseMessaging.onBackgroundMessage(
-    NotificationService.firebaseMessagingBackgroundHandler,
-  );
+  // Register the TOP-LEVEL FCM background handler.
+  // (firebaseMessagingBackgroundHandler is defined in notification_service.dart)
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
   // Initialize local notifications + FCM listeners.
-  await NotificationService.initialize();
+  await NotificationService.instance.initialize();
 
   runApp(const MemoraApp());
 }
@@ -43,19 +42,25 @@ class MemoraApp extends StatelessWidget {
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      // Your current entry screen
+
+      // Splash screen decides if to go to Welcome/Registration
+      // or directly to MainConversationScreen.
       home: const SplashScreen(),
 
-      // Define the routes for navigation.
+      // Optional named route for IncomingCallScreen (kept for completeness).
       routes: {
-        '/incoming_call': (context) {
+        IncomingCallScreen.routeName: (context) {
           final args = ModalRoute.of(context)!.settings.arguments
               as Map<String, dynamic>?;
+
           final callerName = args?['callerName'] as String? ?? 'Unknown';
           final callId = args?['callId'] as String? ?? '';
+          final initialMessage = args?['initialMessage'] as String? ?? '';
+
           return IncomingCallScreen(
             callerName: callerName,
             callId: callId,
+            initialMessage: initialMessage,
           );
         },
       },

@@ -149,7 +149,8 @@ class ApiService {
 
   // --- NEW METHOD 1: answerCall ---
   /// Informs the backend that the user has answered a proactive "call".
-  Future<void> answerCall(String userPhone, String callId) async {
+  Future<Map<String, dynamic>> answerCall(
+      String userPhone, String callId) async {
     final url = Uri.parse('$_baseUrl/answer-call');
     final body = {'user_phone': userPhone, 'call_id': callId};
     print('Sending POST request to: $url with body: ${json.encode(body)}');
@@ -163,9 +164,10 @@ class ApiService {
           )
           .timeout(const Duration(seconds: 10));
 
-      _handleResponse(
-          response); // Throws an error if the status code is not 2xx
+      final handledResponse = _handleResponse(response);
       print('Successfully sent answer-call.');
+      // Decode and return the JSON body from the response.
+      return json.decode(utf8.decode(handledResponse.bodyBytes));
     } catch (e) {
       print('Failed to send answer-call: $e');
       rethrow; // Rethrow to let the UI know the call failed

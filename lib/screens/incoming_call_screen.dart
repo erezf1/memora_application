@@ -1,20 +1,25 @@
 // lib/screens/incoming_call_screen.dart
 
 import 'package:flutter/material.dart';
-import 'package:memora_application/models/user_profile.dart';
-import 'package:memora_application/services/user_profile_service.dart';
+
+import '../models/user_profile.dart';
+import '../services/user_profile_service.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import 'main_conversation_screen.dart';
 
 class IncomingCallScreen extends StatefulWidget {
+  static const String routeName = '/incoming_call';
+
   final String callerName;
   final String callId;
+  final String initialMessage; // text the assistant should speak
 
   const IncomingCallScreen({
     super.key,
     required this.callerName,
     required this.callId,
+    required this.initialMessage,
   });
 
   @override
@@ -22,92 +27,174 @@ class IncomingCallScreen extends StatefulWidget {
 }
 
 class _IncomingCallScreenState extends State<IncomingCallScreen> {
+  final ApiService _apiService = ApiService();
+  UserProfile? _userProfile;
   bool _isProcessing = false;
 
-  Future<UserProfile?> _getProfile() async {
-    return await UserProfileService.loadProfile();
+  @override
+  void initState() {
+    super.initState();
+    _loadUserProfile();
   }
 
-  Future<void> _answerCall() async {
-    if (_isProcessing) return;
-    setState(() => _isProcessing = true);
-
-    await NotificationService.cancelIncomingCallNotification();
-
-    final profile = await _getProfile();
-    if (profile == null || !mounted) {
-      // If no profile, can't answer. Just close the screen.
-      Navigator.of(context).pop();
-      return;
-    }
-
-    try {
-      await ApiService().answerCall(profile.phone, widget.callId);
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => MainConversationScreen(
-              userPhone: profile.phone,
-              initialMessage: 'Hello, how can I help you?',
-            ),
-          ),
-        );
-      }
-    } catch (e) {
-      print('Error answering call: $e');
-      if (mounted) Navigator.of(context).pop(); // Close screen on error
-    }
+  Future<void> _loadUserProfile() async {
+    final profile = await UserProfileService.loadProfile();
+    setState(() {
+      _userProfile = profile;
+    });
   }
 
   Future<void> _declineCall() async {
     if (_isProcessing) return;
     setState(() => _isProcessing = true);
 
-    await NotificationService.cancelIncomingCallNotification();
+    try {
+      final phone = _userProfile?.phone;
 
-    final profile = await _getProfile();
-    if (profile != null) {
-      // We don't wait for this, just fire and forget.
-      ApiService().declineCall(profile.phone, widget.callId);
+      if (phone != null && phone.isNotEmpty) {
+        // TODO: implement /voice/call-declined endpoint in ApiService if needed
+        // await _apiService.callDeclined(phone);
+        print(
+            '[IncomingCall] Declined call for user_phone=$phone, callId=${widget.callId}');
+      } else {
+        print(
+            '[IncomingCall] Declined call but user profile/phone is missing.');
+      }
+
+      await NotificationService.cancelIncomingCallNotification();
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+        Navigator.of(context).pop();
+      }
     }
+  }
 
-    if (mounted) {
-      Navigator.of(context).pop();
+  Future<void> _answerCall() async {
+    if (_isProcessing) return;
+    setState(() => _isProcessing = true);
+
+    try {
+      final phone = _userProfile?.phone;
+
+      if (phone != null && phone.isNotEmpty) {
+        // TODO: implement /voice/call-answered endpoint in ApiService if needed
+        // await _apiService.callAnswered(phone);
+        print(
+            '[IncomingCall] Answered call for user_phone=$phone, callId=${widget.callId}');
+      } else {
+        print(
+            '[IncomingCall] Answered call but user profile/phone is missing.');
+      }
+
+      await NotificationService.cancelIncomingCallNotification();
+
+      if (!mounted) return;
+
+      // Navigate to the main conversation screen, as in your app flow.
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => MainConversationScreen(
+            userPhone: _userProfile?.phone ?? '',
+            initialMessage: widget.initialMessage,
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Scaffold(
-      backgroundColor: Colors.blueGrey[900],
-      body: Center(
+      backgroundColor: Colors.black,
+      body: SafeArea(
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(widget.callerName,
-                style: const TextStyle(fontSize: 28, color: Colors.white)),
-            const SizedBox(height: 10),
-            const Text('Incoming Call...',
-                style: TextStyle(fontSize: 18, color: Colors.white70)),
-            const SizedBox(height: 100),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                FloatingActionButton(
-                  onPressed: _declineCall,
-                  backgroundColor: Colors.red,
-                  child: const Icon(Icons.call_end, color: Colors.white),
+            const SizedBox(height: 32),
+            Text(
+              'שיחה נכנסת', // Incoming call
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: Colors.white70,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              widget.callerName,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.headlineMedium?.copyWith(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Memora',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: Colors.white54,
+              ),
+            ),
+            const Spacer(),
+            if (_isProcessing)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 24),
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                 ),
-                FloatingActionButton(
-                  onPressed: _answerCall,
-                  backgroundColor: Colors.green,
-                  child: const Icon(Icons.call, color: Colors.white),
-                ),
-              ],
+              ),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 40.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildActionButton(
+                    label: 'דחייה', // Decline
+                    icon: Icons.call_end,
+                    color: Colors.red,
+                    onPressed: _declineCall,
+                  ),
+                  _buildActionButton(
+                    label: 'מענה', // Answer
+                    icon: Icons.call,
+                    color: Colors.green,
+                    onPressed: _answerCall,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildActionButton({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onPressed,
+  }) {
+    return Column(
+      children: [
+        FloatingActionButton(
+          heroTag: label,
+          onPressed: onPressed,
+          backgroundColor: color,
+          child: Icon(icon, color: Colors.white),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white,
+          ),
+        ),
+      ],
     );
   }
 }
