@@ -101,24 +101,23 @@ import 'screens/splash_screen.dart';
 import 'screens/incoming_call_screen.dart';
 import 'services/notification_service.dart';
 
-/// Global navigator key so NotificationService can navigate from
-/// notification taps (e.g., to an incoming-call screen).
+/// Global navigator key so NotificationService can navigate
+/// from notification taps.
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Register background handler BEFORE Firebase.initializeApp().
-  FirebaseMessaging.onBackgroundMessage(
-    NotificationService.firebaseMessagingBackgroundHandler,
-  );
+  // Register the TOP-LEVEL FCM background handler.
+  // (firebaseMessagingBackgroundHandler is defined in notification_service.dart)
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
   // Initialize local notifications + FCM listeners.
-  await NotificationService.initialize();
+  await NotificationService.instance.initialize();
 
   runApp(const MemoraApp());
 }
@@ -135,10 +134,12 @@ class MemoraApp extends StatelessWidget {
         primarySwatch: Colors.blue,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      // Your original entry flow
+
+      // Splash screen decides if to go to Welcome/Registration
+      // or directly to MainConversationScreen.
       home: const SplashScreen(),
 
-      // Route for the incoming call screen
+      // Optional named route for IncomingCallScreen (kept for completeness).
       routes: {
         IncomingCallScreen.routeName: (context) {
           final args = ModalRoute.of(context)!.settings.arguments
@@ -146,10 +147,12 @@ class MemoraApp extends StatelessWidget {
 
           final callerName = args?['callerName'] as String? ?? 'Unknown';
           final callId = args?['callId'] as String? ?? '';
+          final initialMessage = args?['initialMessage'] as String? ?? '';
 
           return IncomingCallScreen(
             callerName: callerName,
             callId: callId,
+            initialMessage: initialMessage,
           );
         },
       },
@@ -207,10 +210,10 @@ class UserProfile {
 // lib/screens/incoming_call_screen.dart
 
 import 'package:flutter/material.dart';
-import '../models/user_profile.dart';
-import '../services/api_service.dart';
-import '../services/user_profile_service.dart';
 
+import '../models/user_profile.dart';
+import '../services/user_profile_service.dart';
+import '../services/api_service.dart';
 import '../services/notification_service.dart';
 import 'main_conversation_screen.dart';
 
@@ -219,11 +222,13 @@ class IncomingCallScreen extends StatefulWidget {
 
   final String callerName;
   final String callId;
+  final String initialMessage; // text the assistant should speak
 
   const IncomingCallScreen({
     super.key,
     required this.callerName,
     required this.callId,
+    required this.initialMessage,
   });
 
   @override
@@ -231,12 +236,21 @@ class IncomingCallScreen extends StatefulWidget {
 }
 
 class _IncomingCallScreenState extends State<IncomingCallScreen> {
+  final ApiService _apiService = ApiService();
+  UserProfile? _userProfile;
   bool _isProcessing = false;
 
-  // Helper to get the current user's phone number
-  Future<String?> _getUserPhone() async {
+  @override
+  void initState() {
+    super.initState();
+    _loadUserProfile();
+  }
+
+  Future<void> _loadUserProfile() async {
     final profile = await UserProfileService.loadProfile();
-    return profile?.phone;
+    setState(() {
+      _userProfile = profile;
+    });
   }
 
   Future<void> _declineCall() async {
@@ -244,15 +258,20 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     setState(() => _isProcessing = true);
 
     try {
-      // Notify the backend that the call was declined.
-      final userPhone = await _getUserPhone();
-      if (userPhone != null) {
-        // We don't wait for this to finish, just fire and forget.
-        ApiService().declineCall(userPhone, widget.callId);
+      final phone = _userProfile?.phone;
+
+      if (phone != null && phone.isNotEmpty) {
+        // TODO: implement /voice/call-declined endpoint in ApiService if needed
+        // await _apiService.callDeclined(phone);
+        print(
+            '[IncomingCall] Declined call for user_phone=$phone, callId=${widget.callId}');
+      } else {
+        print(
+            '[IncomingCall] Declined call but user profile/phone is missing.');
       }
+
       await NotificationService.cancelIncomingCallNotification();
     } finally {
-      // Always close the screen after declining.
       if (mounted) {
         setState(() => _isProcessing = false);
         Navigator.of(context).pop();
@@ -265,30 +284,31 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     setState(() => _isProcessing = true);
 
     try {
-      // Notify the backend that the call was accepted.
-      final userPhone = await _getUserPhone();
-      if (userPhone == null) {
-        // Can't answer without a user profile, so just close the screen.
-        if (mounted) Navigator.of(context).pop();
-        return;
+      final phone = _userProfile?.phone;
+
+      if (phone != null && phone.isNotEmpty) {
+        // TODO: implement /voice/call-answered endpoint in ApiService if needed
+        // await _apiService.callAnswered(phone);
+        print(
+            '[IncomingCall] Answered call for user_phone=$phone, callId=${widget.callId}');
+      } else {
+        print(
+            '[IncomingCall] Answered call but user profile/phone is missing.');
       }
 
-      final response = await ApiService().answerCall(userPhone, widget.callId);
       await NotificationService.cancelIncomingCallNotification();
 
-      // Navigate to the main conversation screen with the initial message from the backend.
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => MainConversationScreen(
-              userPhone: userPhone,
-              // Use the message from the answer-call response.
-              initialMessage:
-                  response['initial_message'] ?? 'Hello, how can I help?',
-            ),
+      if (!mounted) return;
+
+      // Navigate to the main conversation screen, as in your app flow.
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => MainConversationScreen(
+            userPhone: _userProfile?.phone ?? '',
+            initialMessage: widget.initialMessage,
           ),
-        );
-      }
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() => _isProcessing = false);
@@ -307,7 +327,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
           children: [
             const SizedBox(height: 32),
             Text(
-              'Incoming call',
+              'שיחה נכנסת', // Incoming call
               style: theme.textTheme.titleMedium?.copyWith(
                 color: Colors.white70,
               ),
@@ -342,13 +362,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   _buildActionButton(
-                    label: 'Decline',
+                    label: 'דחייה', // Decline
                     icon: Icons.call_end,
                     color: Colors.red,
                     onPressed: _declineCall,
                   ),
                   _buildActionButton(
-                    label: 'Answer',
+                    label: 'מענה', // Answer
                     icon: Icons.call,
                     color: Colors.green,
                     onPressed: _answerCall,
@@ -1203,193 +1223,455 @@ class ApiService {
 
 
 ==================== FILE: lib\services\notification_service.dart ====================
-// lib/services/notification_service.dart
-
 import 'dart:convert';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-import '../main.dart'; // for navigatorKey
+import '../screens/main_conversation_screen.dart';
 import '../screens/incoming_call_screen.dart';
+import '../main.dart'; // for navigatorKey
+
+/// Channel / notification ids
+const String _incomingCallChannelId = 'memora_incoming_call_channel';
+const String _incomingCallChannelName = 'Memora Incoming Calls';
+const String _incomingCallChannelDescription =
+    'High priority incoming-call style notifications for Memora';
+
+const int _incomingCallNotificationId = 1001;
+
+/// Android action ids
+const String _answerActionId = 'ANSWER_ACTION';
+const String _declineActionId = 'DECLINE_ACTION';
+
+/// TOP-LEVEL background handler for FCM.
+///
+/// Must be a top-level or static function and annotated as entry point so
+/// it is kept in AOT.
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  debugPrint('[NotificationService] TOP-LEVEL BG HANDLER START');
+  debugPrint(
+      '[NotificationService] [BG] messageId: ${message.messageId ?? "null"}');
+  debugPrint(
+      '[NotificationService] [BG] raw data: ${message.data.isEmpty ? "{}" : message.data.toString()}');
+  debugPrint(
+      '[NotificationService] [BG] notification: ${message.notification}');
+
+  await Firebase.initializeApp();
+  debugPrint('[NotificationService] [BG] Firebase.initializeApp() done');
+
+  await NotificationService.instance._ensureLocalNotificationsInitialized();
+  debugPrint(
+      '[NotificationService] [BG] Local notifications plugin initialized');
+
+  // Treat this as "background" presentation source
+  await NotificationService.instance
+      ._handleRemoteMessage(message, source: 'background');
+
+  debugPrint('[NotificationService] TOP-LEVEL BG HANDLER END');
+}
+
+/// TOP-LEVEL background tap handler for local notifications.
+///
+/// This is required by flutter_local_notifications for
+/// onDidReceiveBackgroundNotificationResponse.
+@pragma('vm:entry-point')
+void notificationTapBackground(NotificationResponse response) {
+  // Just delegate to the instance method
+  NotificationService.instance.handleNotificationResponse(response);
+}
 
 class NotificationService {
-  NotificationService._(); // private constructor
+  NotificationService._internal();
+  static final NotificationService instance = NotificationService._internal();
 
-  static final FlutterLocalNotificationsPlugin _plugin =
+  final FlutterLocalNotificationsPlugin _localNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
-  /// Call once from main() in the foreground isolate.
-  static Future<void> initialize() async {
-    // --- Local notifications initialization ---
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const initSettings = InitializationSettings(
-      android: androidInit,
+  bool _initialized = false;
+
+  Future<void> initialize() async {
+    if (_initialized) return;
+
+    debugPrint('[NotificationService] initialize() called');
+
+    await _ensureLocalNotificationsInitialized();
+
+    // Attach foreground listeners
+    FirebaseMessaging.onMessage.listen(
+      (RemoteMessage message) async {
+        debugPrint(
+            '[NotificationService] onMessage (foreground FCM) received: ${message.messageId}');
+        await _handleRemoteMessage(message, source: 'foreground');
+      },
     );
 
-    await _plugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: _onNotificationResponse,
+    FirebaseMessaging.onMessageOpenedApp.listen(
+      (RemoteMessage message) async {
+        debugPrint(
+            '[NotificationService] onMessageOpenedApp (tap from system tray) for messageId=${message.messageId}');
+        await _handleRemoteMessage(message, source: 'opened_app');
+      },
     );
 
-    // --- FCM foreground & tap handlers ---
-    FirebaseMessaging.onMessage.listen(_onForegroundMessage);
-    FirebaseMessaging.onMessageOpenedApp.listen(_onMessageOpenedApp);
-
-    // If the app was launched by tapping a notification
-    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
-    if (initialMessage != null) {
-      _handleRemoteMessage(initialMessage, source: 'launch');
+    // Handle the case where the app was launched from a terminated state
+    // by tapping on a notification.
+    final initialMsg = await FirebaseMessaging.instance.getInitialMessage();
+    if (initialMsg != null) {
+      debugPrint(
+          '[NotificationService] getInitialMessage() returned a message. Handling as opened_app.');
+      await _handleRemoteMessage(initialMsg, source: 'opened_app');
+    } else {
+      debugPrint(
+          '[NotificationService] getInitialMessage() returned null (no launch-from-notification)');
     }
+
+    _initialized = true;
   }
 
-  // ============================================================
-  // FCM BACKGROUND HANDLER
-  // ============================================================
-  /// Registered in main.dart as:
-  /// FirebaseMessaging.onBackgroundMessage(NotificationService.firebaseMessagingBackgroundHandler);
-  @pragma('vm:entry-point')
-  static Future<void> firebaseMessagingBackgroundHandler(
-    RemoteMessage message,
-  ) async {
-    // Ensure Firebase is ready in the background isolate.
-    await Firebase.initializeApp();
+  Future<void> _ensureLocalNotificationsInitialized() async {
+    // Android initialization
+    const AndroidInitializationSettings androidInitSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    // Initialize local notifications (no tap callback needed here).
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const initSettings = InitializationSettings(android: androidInit);
-    await _plugin.initialize(initSettings);
+    const InitializationSettings initSettings =
+        InitializationSettings(android: androidInitSettings);
 
-    _handleRemoteMessage(message, source: 'background');
+    await _localNotificationsPlugin.initialize(
+      initSettings,
+      // Foreground / already-running case: we can use an instance method.
+      onDidReceiveNotificationResponse: handleNotificationResponse,
+      // Background tap: MUST be top-level or static.
+      onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
+    );
+
+    debugPrint('[NotificationService] Local notifications plugin initialized');
+
+    // Create the incoming-call notification channel.
+    const AndroidNotificationChannel incomingCallChannel =
+        AndroidNotificationChannel(
+      _incomingCallChannelId,
+      _incomingCallChannelName,
+      description: _incomingCallChannelDescription,
+      importance: Importance.max,
+      playSound: true,
+      showBadge: true,
+    );
+
+    final androidPlugin =
+        _localNotificationsPlugin.resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    await androidPlugin?.createNotificationChannel(incomingCallChannel);
   }
 
-  // ============================================================
-  // FCM MESSAGE ROUTING
-  // ============================================================
-  static void _onForegroundMessage(RemoteMessage message) {
-    _handleRemoteMessage(message, source: 'foreground');
-  }
+  // ---------------------------------------------------------------------------
+  // Handling incoming FCM
+  // ---------------------------------------------------------------------------
 
-  static void _onMessageOpenedApp(RemoteMessage message) {
-    _handleRemoteMessage(message, source: 'opened_app');
-  }
+  Future<void> _handleRemoteMessage(RemoteMessage message,
+      {required String source}) async {
+    debugPrint('[NotificationService] _handleRemoteMessage() from $source');
 
-  /// Central place to interpret incoming FCM messages.
-  static void _handleRemoteMessage(
-    RemoteMessage message, {
-    required String source,
-  }) {
     final data = message.data;
-    final type = data['type'];
+    final notification = message.notification;
 
-    if (type == 'incoming_call') {
-      final callerName = data['callerName'] ?? 'Unknown';
-      final callId = data['callId'] ?? '';
+    debugPrint('[NotificationService]   data: $data');
+    debugPrint('[NotificationService]   notification: $notification');
 
-      _showIncomingCallNotification(
-        callerName: callerName,
+    // Extract common fields
+    final String? type = data['type'] as String?;
+    final String title =
+        data['caller_name'] as String? ?? notification?.title ?? 'Memora';
+    final String body = data['description'] as String? ??
+        notification?.body ??
+        'You have a new message from Memora.';
+    final String? callerName = data['caller_name'] as String? ?? title;
+    final String? callId = data['call_id'] as String?;
+    final String? userPhone = data['user_phone'] as String?;
+
+    debugPrint(
+        '[NotificationService]   computed title="$title" body="$body" type="$type" callerName="$callerName" callId="$callId" userPhone="$userPhone"');
+
+    final bool isIncomingCall = type == 'incoming_call' && callId != null;
+    debugPrint('[NotificationService]   isIncomingCall=$isIncomingCall');
+
+    if (isIncomingCall) {
+      debugPrint(
+          '[NotificationService]   Showing INCOMING CALL notification: callerName="$callerName", callId="$callId"');
+      await _showIncomingCallNotification(
+        callerName: callerName ?? 'Memora',
         callId: callId,
+        initialMessage: body,
+        userPhone: userPhone,
+        presentationSource: source,
       );
     } else {
-      // Default/basic notification
-      final title = data['title'] ?? 'Memora';
-      final body = data['body'] ?? 'You have a new notification';
-
-      _showBasicNotification(title: title, body: body);
+      // Fallback for generic notifications if you add them in the future
+      await _showSimpleNotification(title: title, body: body, data: data);
     }
   }
 
-  // ============================================================
-  // LOCAL NOTIFICATION HELPERS
-  // ============================================================
+  // ---------------------------------------------------------------------------
+  // Showing notifications
+  // ---------------------------------------------------------------------------
 
-  /// Simple notification (no full-screen).
-  static Future<void> _showBasicNotification({
-    required String title,
-    required String body,
-  }) async {
-    const androidDetails = AndroidNotificationDetails(
-      'memora_basic_channel',
-      'Memora Notifications',
-      channelDescription: 'General Memora notifications',
-      importance: Importance.defaultImportance,
-      priority: Priority.defaultPriority,
-    );
-
-    const details = NotificationDetails(android: androidDetails);
-
-    await _plugin.show(
-      DateTime.now().millisecondsSinceEpoch ~/ 1000, // unique ID
-      title,
-      body,
-      details,
-    );
-  }
-
-  /// Full-screen incoming call notification.
-  static Future<void> _showIncomingCallNotification({
+  Future<void> _showIncomingCallNotification({
     required String callerName,
     required String callId,
+    required String initialMessage,
+    required String? userPhone,
+    required String presentationSource,
   }) async {
-    const androidDetails = AndroidNotificationDetails(
-      'memora_incoming_call_channel',
-      'Incoming Calls',
-      channelDescription: 'Memora incoming call notifications',
+    debugPrint(
+        '[NotificationService] _showIncomingCallNotification(): callerName="$callerName", callId="$callId", initialMessage="$initialMessage", userPhone="$userPhone"');
+
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      _incomingCallChannelId,
+      _incomingCallChannelName,
+      channelDescription: _incomingCallChannelDescription,
       importance: Importance.max,
       priority: Priority.high,
       category: AndroidNotificationCategory.call,
-      fullScreenIntent: true, // 💥 key flag to get call-style behavior
-      autoCancel: false,
+      fullScreenIntent:
+          true, // important for lockscreen / heads-up call-like UI
       ongoing: true,
+      autoCancel: false,
+      playSound: true,
+      ticker: 'Memora incoming call',
+      actions: <AndroidNotificationAction>[
+        AndroidNotificationAction(
+          _answerActionId,
+          'Answer',
+          showsUserInterface: true,
+          cancelNotification: true,
+        ),
+        AndroidNotificationAction(
+          _declineActionId,
+          'Decline',
+          showsUserInterface: true,
+          cancelNotification: true,
+        ),
+      ],
     );
 
-    const details = NotificationDetails(android: androidDetails);
+    const NotificationDetails details =
+        NotificationDetails(android: androidDetails);
 
     final payload = jsonEncode({
       'type': 'incoming_call',
       'callerName': callerName,
       'callId': callId,
+      'initialMessage': initialMessage,
+      'userPhone': userPhone,
+      // how the message was presented (foreground / background / opened_app)
+      'presentationSource': presentationSource,
     });
 
-    await _plugin.show(
-      9999, // fixed ID for the active call
-      'Incoming call',
+    await _localNotificationsPlugin.show(
+      _incomingCallNotificationId,
       callerName,
+      initialMessage,
+      details,
+      payload: payload,
+    );
+
+    debugPrint(
+        '[NotificationService] _showIncomingCallNotification(): show() completed');
+  }
+
+  Future<void> _showSimpleNotification({
+    required String title,
+    required String body,
+    Map<String, dynamic>? data,
+  }) async {
+    const AndroidNotificationDetails androidDetails =
+        AndroidNotificationDetails(
+      'memora_default_channel',
+      'Memora Notifications',
+      channelDescription: 'General notifications from Memora',
+      importance: Importance.high,
+      priority: Priority.high,
+      playSound: true,
+    );
+
+    const NotificationDetails details =
+        NotificationDetails(android: androidDetails);
+
+    final payload = jsonEncode({
+      'type': 'generic',
+      'title': title,
+      'body': body,
+      if (data != null) 'data': data,
+    });
+
+    await _localNotificationsPlugin.show(
+      0,
+      title,
+      body,
       details,
       payload: payload,
     );
   }
 
-  /// Cancel the active incoming call notification.
-  static Future<void> cancelIncomingCallNotification() async {
-    await _plugin.cancel(9999);
-  }
+  // ---------------------------------------------------------------------------
+  // Notification response handling
+  // ---------------------------------------------------------------------------
 
-  // ============================================================
-  // TAP HANDLER
-  // ============================================================
+  /// Called for **foreground / active** notifications,
+  /// and also via [notificationTapBackground] when the app is brought back
+  /// from the background by tapping on a notification.
+  void handleNotificationResponse(NotificationResponse response) {
+    debugPrint('[NotificationService] handleNotificationResponse() called');
+    debugPrint('[NotificationService]   actionId: ${response.actionId}');
+    debugPrint('[NotificationService]   input: ${response.input}');
+    debugPrint(
+        '[NotificationService]   payload: ${response.payload ?? "null"}');
 
-  static void _onNotificationResponse(NotificationResponse response) {
-    final payload = response.payload;
-    if (payload == null || payload.isEmpty) return;
+    if (response.payload == null) {
+      return;
+    }
 
-    final data = jsonDecode(payload) as Map<String, dynamic>;
-    final type = data['type'];
+    final Map<String, dynamic> data =
+        jsonDecode(response.payload!) as Map<String, dynamic>;
+    final String? type = data['type'] as String?;
+    debugPrint('[NotificationService]   decoded type="$type" data=$data');
 
     if (type == 'incoming_call') {
-      final callerName = data['callerName'] as String? ?? 'Unknown';
-      final callId = data['callId'] as String? ?? '';
+      _handleIncomingCallNotificationResponse(response, data);
+    } else {
+      // generic notifications, if any, could be handled here
+    }
+  }
 
-      // Navigate to the incoming call screen
-      navigatorKey.currentState?.pushNamed(
-        IncomingCallScreen.routeName,
-        arguments: {
-          'callerName': callerName,
-          'callId': callId,
-        },
+  void _handleIncomingCallNotificationResponse(
+    NotificationResponse response,
+    Map<String, dynamic> data,
+  ) {
+    final String? callerName = data['callerName'] as String?;
+    final String? callId = data['callId'] as String?;
+    final String? initialMessage = data['initialMessage'] as String?;
+    final String? userPhone = data['userPhone'] as String?;
+    final String? presentationSource = data['presentationSource'] as String?;
+    final String actionId = response.actionId ?? '';
+
+    if (callId == null) {
+      debugPrint(
+          '[NotificationService]   Incoming call payload missing callId. Ignoring.');
+      return;
+    }
+
+    final cameFromBackground = presentationSource == 'background';
+
+    if (actionId == _declineActionId) {
+      // User explicitly declined the call
+      debugPrint(
+          '[NotificationService]   DECLINE action. Staying where we are.');
+      cancelIncomingCallNotification();
+      // Optionally notify server later.
+      return;
+    }
+
+    // ANSWER or body tap
+    debugPrint(
+        '[NotificationService]   ANSWER (or body tap). presentationSource="$presentationSource"');
+
+    final String safeInitialMessage =
+        initialMessage ?? 'Hello, how can I help?';
+
+    if (cameFromBackground) {
+      // PHONE LOCKED / APP IN BACKGROUND CASE
+      // → open IncomingCallScreen first, and let it handle answerCall + navigation
+      debugPrint(
+          '[NotificationService]   Navigating to IncomingCallScreen with callerName="$callerName", callId="$callId"');
+      cancelIncomingCallNotification();
+
+      _navigateToIncomingCallScreen(
+        callerName: callerName ?? 'Memora',
+        callId: callId,
+        initialMessage: safeInitialMessage,
+      );
+    } else {
+      // PHONE IN USE (FOREGROUND / OPENED_APP)
+      // → go directly to MainConversationScreen with the text on top.
+      debugPrint(
+          '[NotificationService]   Navigating directly to MainConversationScreen with userPhone="$userPhone", callId="$callId"');
+
+      cancelIncomingCallNotification();
+
+      if (userPhone == null || userPhone.isEmpty) {
+        debugPrint(
+            '[NotificationService]   No userPhone in payload; cannot navigate to MainConversationScreen.');
+        return;
+      }
+
+      _navigateToMainConversationScreen(
+        userPhone: userPhone,
+        initialMessage: safeInitialMessage,
       );
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Navigation helpers
+  // ---------------------------------------------------------------------------
+
+  void _navigateToIncomingCallScreen({
+    required String callerName,
+    required String callId,
+    required String initialMessage,
+  }) {
+    final nav = navigatorKey.currentState;
+    if (nav == null) {
+      debugPrint(
+          '[NotificationService] navigatorKey.currentState is null, cannot navigate to IncomingCallScreen.');
+      return;
+    }
+
+    nav.pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => IncomingCallScreen(
+          callerName: callerName,
+          callId: callId,
+          initialMessage: initialMessage,
+        ),
+      ),
+      (route) => false,
+    );
+  }
+
+  void _navigateToMainConversationScreen({
+    required String userPhone,
+    required String initialMessage,
+  }) {
+    final nav = navigatorKey.currentState;
+    if (nav == null) {
+      debugPrint(
+          '[NotificationService] navigatorKey.currentState is null, cannot navigate to MainConversationScreen.');
+      return;
+    }
+
+    nav.pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => MainConversationScreen(
+          userPhone: userPhone,
+          initialMessage: initialMessage,
+        ),
+      ),
+      (route) => false,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public util
+  // ---------------------------------------------------------------------------
+
+  static Future<void> cancelIncomingCallNotification() async {
+    await instance._localNotificationsPlugin
+        .cancel(_incomingCallNotificationId);
   }
 }
 
@@ -1556,86 +1838,48 @@ flutter {
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Notification permissions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-    
+
     <!-- Full-screen intent permission for incoming calls (Android 12+) -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
+        android:name="${applicationName}"
         android:label="Memora"
-        android:icon="@mipmap/ic_launcher"
-        android:requestLegacyExternalStorage="true">
+        android:icon="@mipmap/ic_launcher">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
             android:launchMode="singleTop"
             android:theme="@style/LaunchTheme"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|locale|layoutDirection|fontScale|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
-            <!-- Specifies an Android theme to apply to this Activity as soon as
-                 the Android process has started. This theme is visible to the user
-                 while the Flutter UI initializes. After that, this theme continues
-                 to determine the Window background behind the Flutter UI. -->
-            <meta-data android:name="io.flutter.embedding.android.NormalTheme" android:resource="@style/NormalTheme" />
         </activity>
 
-        <!-- High-priority channel for incoming calls. This is crucial for full-screen intents. -->
+        <!-- Default notification channel (used by flutter_local_notifications + FCM fallback) -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="memora_incoming_call_channel" />
-        <service
-            android:name=".MyFirebaseMessagingService"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT"/>
-            </intent-filter>
-        </service>
-        <!-- Notification channel definition -->
-        <service
-            android:name="com.google.firebase.messaging.FirebaseMessagingService"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.google.firebase.MESSAGING_EVENT" />
-            </intent-filter>
-        </service>
+            android:value="memora_basic_channel" />
 
-        <!-- Don't delete the meta-data below.
-             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <!-- Required for Flutter v2 embedding -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
 </manifest>
-
-<!-- The following file is not part of the project, but is needed for the fix -->
-<!-- It should be created at android/app/src/main/kotlin/com/example/memora_application/MyFirebaseMessagingService.kt -->
-<!--
-package com.example.memora_application
-
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.os.Build
-import com.google.firebase.messaging.FirebaseMessagingService
-
-class MyFirebaseMessagingService : FirebaseMessagingService() {
-    // This class is intentionally left empty.
-    // Its purpose is to be declared in the AndroidManifest.xml, which triggers
-    // the system to correctly process the notification channel metadata.
-}
--->
 
 
 ==================== FILE: android\app\src\main\java\io\flutter\plugins\GeneratedPluginRegistrant.java ====================

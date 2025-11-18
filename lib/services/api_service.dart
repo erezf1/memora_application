@@ -149,10 +149,9 @@ class ApiService {
 
   // --- NEW METHOD 1: answerCall ---
   /// Informs the backend that the user has answered a proactive "call".
-  Future<Map<String, dynamic>> answerCall(
-      String userPhone, String callId) async {
-    final url = Uri.parse('$_baseUrl/answer-call');
-    final body = {'user_phone': userPhone, 'call_id': callId};
+  Future<Map<String, dynamic>> answerCall(String userPhone) async {
+    final url = Uri.parse('$_baseUrl/voice/call-answered');
+    final body = {'user_id': userPhone};
     print('Sending POST request to: $url with body: ${json.encode(body)}');
 
     try {
@@ -165,20 +164,20 @@ class ApiService {
           .timeout(const Duration(seconds: 10));
 
       final handledResponse = _handleResponse(response);
-      print('Successfully sent answer-call.');
+      print('Successfully sent call-answered (protocol endpoint 4).');
       // Decode and return the JSON body from the response.
       return json.decode(utf8.decode(handledResponse.bodyBytes));
     } catch (e) {
-      print('Failed to send answer-call: $e');
+      print('Failed to send voice/call-answered: $e');
       rethrow; // Rethrow to let the UI know the call failed
     }
   }
 
   // --- NEW METHOD 2: declineCall ---
   /// Informs the backend that the user has declined a proactive "call".
-  Future<void> declineCall(String userPhone, String callId) async {
-    final url = Uri.parse('$_baseUrl/decline-call');
-    final body = {'user_phone': userPhone, 'call_id': callId};
+  Future<void> declineCall(String userPhone) async {
+    final url = Uri.parse('$_baseUrl/voice/call-declined');
+    final body = {'user_id': userPhone};
     print('Sending POST request to: $url with body: ${json.encode(body)}');
 
     try {
@@ -190,10 +189,10 @@ class ApiService {
           )
           .timeout(const Duration(seconds: 10));
 
-      print('Successfully sent decline-call.');
+      print('Successfully sent call-declined (protocol endpoint 5).');
     } catch (e) {
       // We don't rethrow here, as the UI should close even if the decline message fails.
-      print('Failed to send decline-call: $e');
+      print('Failed to send voice/call-declined: $e');
     }
   }
 }

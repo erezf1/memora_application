@@ -1,11 +1,12 @@
 // lib/screens/incoming_call_screen.dart
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/user_profile.dart';
-import '../services/user_profile_service.dart';
 import '../services/api_service.dart';
 import '../services/notification_service.dart';
+import '../services/user_profile_service.dart';
 import 'main_conversation_screen.dart';
 
 class IncomingCallScreen extends StatefulWidget {
@@ -13,7 +14,7 @@ class IncomingCallScreen extends StatefulWidget {
 
   final String callerName;
   final String callId;
-  final String initialMessage; // text the assistant should speak
+  final String initialMessage;
 
   const IncomingCallScreen({
     super.key,
@@ -34,6 +35,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   @override
   void initState() {
     super.initState();
+    debugPrint(
+        '[IncomingCallScreen] initState callId=${widget.callId} caller=${widget.callerName}');
     _loadUserProfile();
   }
 
@@ -45,60 +48,63 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   }
 
   Future<void> _declineCall() async {
+    debugPrint(
+        '[IncomingCallScreen] Decline tapped for callId=${widget.callId}');
     if (_isProcessing) return;
     setState(() => _isProcessing = true);
 
     try {
       final phone = _userProfile?.phone;
-
       if (phone != null && phone.isNotEmpty) {
-        // TODO: implement /voice/call-declined endpoint in ApiService if needed
-        // await _apiService.callDeclined(phone);
-        print(
-            '[IncomingCall] Declined call for user_phone=$phone, callId=${widget.callId}');
-      } else {
-        print(
-            '[IncomingCall] Declined call but user profile/phone is missing.');
+        try {
+          await _apiService.declineCall(phone);
+        } catch (e) {
+          debugPrint('[IncomingCallScreen] declineCall error: $e');
+        }
       }
-
       await NotificationService.cancelIncomingCallNotification();
+      debugPrint('[IncomingCallScreen] Notification canceled (decline)');
+      debugPrint('[IncomingCallScreen] Exiting app on decline');
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      }
+      SystemNavigator.pop();
     } finally {
       if (mounted) {
         setState(() => _isProcessing = false);
-        Navigator.of(context).pop();
       }
     }
   }
 
   Future<void> _answerCall() async {
+    debugPrint(
+        '[IncomingCallScreen] Answer tapped for callId=${widget.callId}');
     if (_isProcessing) return;
     setState(() => _isProcessing = true);
 
     try {
       final phone = _userProfile?.phone;
-
       if (phone != null && phone.isNotEmpty) {
-        // TODO: implement /voice/call-answered endpoint in ApiService if needed
-        // await _apiService.callAnswered(phone);
-        print(
-            '[IncomingCall] Answered call for user_phone=$phone, callId=${widget.callId}');
-      } else {
-        print(
-            '[IncomingCall] Answered call but user profile/phone is missing.');
+        try {
+          await _apiService.answerCall(phone);
+        } catch (e) {
+          debugPrint('[IncomingCallScreen] answerCall error: $e');
+        }
       }
 
       await NotificationService.cancelIncomingCallNotification();
+      debugPrint('[IncomingCallScreen] Notification canceled (answer)');
 
       if (!mounted) return;
 
-      // Navigate to the main conversation screen, as in your app flow.
-      Navigator.of(context).pushReplacement(
+      Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
           builder: (_) => MainConversationScreen(
             userPhone: _userProfile?.phone ?? '',
             initialMessage: widget.initialMessage,
           ),
         ),
+        (route) => false,
       );
     } finally {
       if (mounted) {
@@ -118,7 +124,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
           children: [
             const SizedBox(height: 32),
             Text(
-              'שיחה נכנסת', // Incoming call
+              'Incoming call',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: Colors.white70,
               ),
@@ -153,13 +159,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   _buildActionButton(
-                    label: 'דחייה', // Decline
+                    label: 'Decline',
                     icon: Icons.call_end,
                     color: Colors.red,
                     onPressed: _declineCall,
                   ),
                   _buildActionButton(
-                    label: 'מענה', // Answer
+                    label: 'Answer',
                     icon: Icons.call,
                     color: Colors.green,
                     onPressed: _answerCall,

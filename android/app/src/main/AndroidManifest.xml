@@ -1,4 +1,4 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+﻿<manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.memora_application">
 
     <!-- Required permissions for notifications and calls -->
@@ -16,9 +16,7 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
 
     <application
-        android:name="${applicationName}"
-        android:label="Memora"
-        android:icon="@mipmap/ic_launcher">
+        android:name="${applicationName}" android:label="Memora" android:icon="@mipmap/ic_launcher">
 
         <activity
             android:name=".MainActivity"
@@ -48,3 +46,8 @@
             android:value="2" />
     </application>
 </manifest>
+
+
+
+
+
